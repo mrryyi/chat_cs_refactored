@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 15
+VisualStudioVersion = 15.0.28307.572
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "chat_server", "chat_server\chat_server.csproj", "{3336D460-60A1-4048-BC3F-874A1F72EC6B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3336D460-60A1-4048-BC3F-874A1F72EC6B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3336D460-60A1-4048-BC3F-874A1F72EC6B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3336D460-60A1-4048-BC3F-874A1F72EC6B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3336D460-60A1-4048-BC3F-874A1F72EC6B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {203C44E2-5310-4B83-BDB7-552A40758C7C}
+	EndGlobalSection
+EndGlobal

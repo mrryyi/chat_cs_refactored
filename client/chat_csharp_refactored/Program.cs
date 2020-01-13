@@ -10,8 +10,12 @@ using System.Text.RegularExpressions;
 
 namespace chat_csharp_refactored
 {
+
     class Chat
     {
+
+        Thread recvThread;
+        Thread sendThread;
 
         public IPAddress hostIP_;
         public Socket sender_;
@@ -23,14 +27,35 @@ namespace chat_csharp_refactored
         private bool hostIPSet_ = false;
         private bool portSet_ = false;
 
-        private bool encryptedMode = true;
-        private bool temporaryNoEncryptMode = false;
+        private bool encryptedMode_ = true;
+        private bool temporaryNoEncryptMode_ = false;
 
-        private bool chatting = false;
-        private bool readyToSend = false;
-        private string msgToSend;
+        private bool connected_ = false;
+        private bool readyToSend_ = false;
+        private string msgToSend_;
 
-        
+        public bool Disconnect()
+        {
+            // Release the socket.
+
+            if (recvThread.IsAlive)
+                recvThread.Abort();
+            if (sendThread.IsAlive)
+                sendThread.Abort();
+
+            sender_.Shutdown(SocketShutdown.Both);
+            sender_.Close();
+
+            connected_ = false;
+
+            return true;
+        }
+
+        public bool IsConnected()
+        {
+            return connected_;
+        }
+
         public void SetPort(int port)
         {
             port_ = port;
@@ -45,14 +70,15 @@ namespace chat_csharp_refactored
             Console.WriteLine("Host IP set.");
         }
 
-        public void activateTemporaryNoEncryptMode()
+        public void ActivateTemporaryNoEncryptMode()
         {
-            temporaryNoEncryptMode = true;
+            temporaryNoEncryptMode_ = true;
         }
 
-        public void toggleNoEncryptMode()
+        public bool ToggleNoEncryptMode()
         {
-            encryptedMode = !encryptedMode;
+            encryptedMode_ = !encryptedMode_;
+            return encryptedMode_;
         }
 
         public void SetSender()
@@ -88,8 +114,8 @@ namespace chat_csharp_refactored
         
         public void SetMessage(string message)
         {
-            msgToSend = message;
-            readyToSend = true;
+            msgToSend_ = message;
+            readyToSend_ = true;
         }
 
         private void Encrypt(ref byte[] msg, int maxBytes)
@@ -135,20 +161,26 @@ namespace chat_csharp_refactored
 
             int bytesRecv;
 
-            while (chatting)
+            string t;
+
+            while (connected_)
             {
                 try
                 {
                     bytesRecv = sender_.Receive(recvBuffer);
-                    if (encryptedMode)
+                    if (encryptedMode_)
                     {
                         Decrypt(ref recvBuffer, bytesRecv);
                     }
-                    Console.WriteLine(Encoding.UTF8.GetString(recvBuffer, 0, bytesRecv));
+
+                    t = Encoding.UTF8.GetString(recvBuffer, 0, bytesRecv);
+
+                    if (t.Length > 1)
+                        Console.WriteLine(t);
                 }
                 catch
                 {
-                    Console.WriteLine("Server or socket error.");
+                    connected_ = false;
                 }
             }
         }
@@ -160,24 +192,30 @@ namespace chat_csharp_refactored
 
             int bytesSent;
 
-            while (chatting)
+            while (connected_)
             {
-                if (readyToSend)
+                if (readyToSend_)
                 {
 
-                    bytemsg = Encoding.UTF8.GetBytes(msgToSend);
+                    bytemsg = Encoding.UTF8.GetBytes(msgToSend_);
                     
-                    if (encryptedMode && !temporaryNoEncryptMode)
+                    if (encryptedMode_ && !temporaryNoEncryptMode_)
                     {
                         Encrypt(ref bytemsg, bytemsg.Length);
                     }
                     
                     Console.WriteLine(Encoding.UTF8.GetString(bytemsg));
 
-
-                    bytesSent = sender_.Send(bytemsg);
-                    readyToSend = false;
-                    temporaryNoEncryptMode = false;
+                    try
+                    {
+                        bytesSent = sender_.Send(bytemsg);
+                        readyToSend_ = false;
+                        temporaryNoEncryptMode_ = false;
+                    }
+                    catch
+                    {
+                        connected_ = false;
+                    }
                 }
             }
         }
@@ -186,25 +224,49 @@ namespace chat_csharp_refactored
         {
             bool success = false;
 
+            Console.WriteLine("Attempting to connect...");
+
             if (senderSet_ && remoteEPSet_ && hostIPSet_ && portSet_)
             {
                 try
                 {
                     sender_.Connect(remoteEP_);
 
-                    chatting = true;
+                    connected_ = true;
 
-                    Thread recvThread = new Thread(new ThreadStart(ThreadReceive));
-                    Thread sendThread = new Thread(new ThreadStart(ThreadSend));
+                    Console.WriteLine("Connected to " + hostIP_.ToString() + ":" + port_);
+
+                    recvThread = new Thread(new ThreadStart(ThreadReceive));
+                    sendThread = new Thread(new ThreadStart(ThreadSend));
 
                     recvThread.Start();
                     sendThread.Start();
 
                     success = true;
+                    
                 }
                 catch (SocketException)
                 {
                     Console.WriteLine("Error connecting to socket.");
+                }
+            }
+            else
+            {
+                if (!hostIPSet_)
+                {
+                    Console.WriteLine("Host IP not set.");
+                }
+                if (!portSet_)
+                {
+                    Console.WriteLine("Port not set.");
+                }
+                if (!remoteEPSet_)
+                {
+                    Console.WriteLine("Remote endpoint not set");
+                }
+                if (!senderSet_)
+                {
+                    Console.WriteLine("Sender (socket) not set.");
                 }
             }
 
@@ -215,14 +277,20 @@ namespace chat_csharp_refactored
         {
 
         }
+
+        ~Chat()
+        {
+
+        }
     }
 
     class Program
     {
 
         static Chat chat;
+        static string userInput;
 
-        static bool isIP(string input)
+        static bool IsIP(string input)
         {
             string ipAddressPattern = "^(?=.*[^\\.]$)((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.?){4}$";
             Match match = Regex.Match(input, ipAddressPattern);
@@ -239,7 +307,7 @@ namespace chat_csharp_refactored
 
         static bool GetIP(string input, ref IPAddress addr)
         {
-            if (isIP(input))
+            if (IsIP(input))
             {
                 Console.WriteLine(input + " is valid IP address.");
                 addr = IPAddress.Parse(input);
@@ -274,7 +342,7 @@ namespace chat_csharp_refactored
             input = Console.ReadLine();
 
 
-            if (!input.All(Char.IsDigit))
+            if (!input.All(Char.IsDigit) || input.Length == 0)
             {
                 Console.WriteLine("Invalid. Setting port to default: " + port);
             }
@@ -318,39 +386,55 @@ namespace chat_csharp_refactored
         static void ChangeMode()
         {
             Console.WriteLine("Changed Mode.");
-            chat.toggleNoEncryptMode();
+            bool e = chat.ToggleNoEncryptMode();
+            if (e)
+                Console.WriteLine("Changed mode to encrypted r/w.");
+            else
+                Console.WriteLine("Changed mode to regular r/w.");
         }
 
-        static void TemporaryNoEncryptMode()
+        static void TemporaryNoEncryptWhisper()
         {
-            chat.activateTemporaryNoEncryptMode();
+            chat.ActivateTemporaryNoEncryptMode();
+        }
+
+        static void TemporaryNoEncrypt()
+        {
+            userInput.Remove(0, 3);
+            chat.ActivateTemporaryNoEncryptMode();
+        }
+
+        static void QuitChat()
+        {
+            chat.Disconnect();
         }
 
         static Dictionary<string, Action> settingCommands = new Dictionary<string, Action>
         {
-            { ".mode", ChangeMode }
+            { ".mode", ChangeMode },
+            { "quit()", QuitChat }
         };
 
         static Dictionary<string, Action> sendCommands = new Dictionary<string, Action>
         {
-            { "/w", TemporaryNoEncryptMode },
-            { "/noe", TemporaryNoEncryptMode }
+            { "/w", TemporaryNoEncryptWhisper },
+            { "/noe", TemporaryNoEncrypt }
         };
 
 
-        static bool HandleInput(string message)
+        static bool HandleInput()
         {
 
             bool sendable = true;
             string key;
 
-            if (message.Contains(' '))
+            if (userInput.Contains(' '))
             {
-                key = message.Split(' ')[0];
+                key = userInput.Split(' ')[0];
             }
             else
             {
-                key = message;
+                key = userInput;
             }
 
             // If we just want to do a setting, then don't send anything,
@@ -364,6 +448,7 @@ namespace chat_csharp_refactored
 
             if (sendCommands.ContainsKey(key))
             {
+                // In the case that we have a 
                 var action = sendCommands[key];
                 action();
             }
@@ -376,28 +461,35 @@ namespace chat_csharp_refactored
         {
 
             chat = new Chat();
-
-            bool chatActive = false;
+            
             bool going = true;
             bool sendableInput;
 
-            string message;
-
             while (going)
             {
-                if (!chatActive)
+
+                if (!chat.IsConnected())
                 {
                     chat = new Chat();
                     NewChat(ref chat);
-                    chatActive = chat.TryConnect();
+                    chat.TryConnect();
                 }
                 else
                 {
-                    message = Console.ReadLine();
-                    sendableInput = HandleInput(message);
-                    if (sendableInput)
+                    userInput = Console.ReadLine();
+
+                    // If we disconnect by time we enter our thing, it should not go further.
+                    if (chat.IsConnected())
                     {
-                        chat.SetMessage(message);
+                        sendableInput = HandleInput();
+                        if (sendableInput)
+                        {
+                            chat.SetMessage(userInput);
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("Error: not connected anymore.");
                     }
                 }
 
