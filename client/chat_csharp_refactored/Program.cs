@@ -176,7 +176,10 @@ namespace chat_csharp_refactored
                     t = Encoding.UTF8.GetString(recvBuffer, 0, bytesRecv);
 
                     if (t.Length > 1)
-                        Console.WriteLine(t);
+                    {
+                        Console.Write(t);
+                        Console.Write('\n');
+                    }
                 }
                 catch
                 {

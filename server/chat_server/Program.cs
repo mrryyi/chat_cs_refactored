@@ -67,7 +67,7 @@ namespace chat_server
     {
         
         static Dictionary<string, ClientHandler> clients = new Dictionary<string, ClientHandler>();
-        private static string SqlLoginString = "server=localhost; userid=root; password=Mbmbmb999999999; database=kurs";
+        private static string SqlLoginString = "server=localhost; userid=root; password=WhatsupSlappers; database=kurs";
         private static MySqlConnection SqlConnection;
 
         public static void UpdateClientDictionary(string oldID, string newName)
@@ -79,6 +79,7 @@ namespace chat_server
 
         public static void RemoveThisClient(string name)
         {
+            Program.Broadcast(new Message("[" + name + "] has left the chat.", "announcer"));
             clients.Remove(name);
         }
 
@@ -235,9 +236,26 @@ namespace chat_server
 
         }
 
-        static void GetHistory(string clientName)
+        public static MySqlDataReader GetTodayHistory(string clientName)
         {
+            if (clients.ContainsKey(clientName)) {
+                string sqlQuery = "SELECT * FROM message WHERE (Target=@clientName OR Target='all') AND DATE(Time)=DATE(NOW()) ORDER BY Time ASC";
+                
+                try
+                {
+                    MySqlCommand command = new MySqlCommand(sqlQuery, SqlConnection);
+                    command.Parameters.AddWithValue("@clientName", clientName);
+                    MySqlDataReader reader = command.ExecuteReader();
+                    return reader;
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine(e.ToString());
+                }
+                                 
+            }
 
+            return null;
         }
 
         static void InitiateSQL()
@@ -280,6 +298,11 @@ namespace chat_server
             chatThread.Start();
         }
 
+        public void StopSocket()
+        {
+            this.ClientSocket_.Close();
+        }
+
         private string GetMessage()
         {
 
@@ -315,6 +338,7 @@ namespace chat_server
                 NetworkStream stream = ClientSocket_.GetStream();
                 stream.Write(sendBuffer, 0, sendBuffer.Length);
                 Console.WriteLine("Sent \"" + message.FullMessage_ + "\" to " + this.Name_);
+                Thread.Sleep(1); // So that the clients don't receive multiple messages.
                 return true;
             }
             catch (Exception ex)
@@ -376,6 +400,42 @@ namespace chat_server
 
             return null;
         }
+
+        private void ReadHistory()
+        {
+            MySqlDataReader reader = Program.GetTodayHistory(this.Name_);
+            if (reader != null)
+            {
+                Message msg;
+                DateTime timeTemp;
+                while (reader.Read())
+                {
+                    timeTemp = (DateTime) reader["Time"];
+                    //Console
+
+                    if (reader["Target"].ToString() == this.Name_)
+                    {
+                        msg = new Message(reader["Content"].ToString(), "(from) " + reader["Sender"].ToString(), (DateTime)reader["Time"]);
+                        msg.AssembleFullMessage();
+                        SendMessage(msg);
+                    }
+                    else if (reader["Target"].ToString() != "all")
+                    {
+                        msg = new Message(reader["Content"].ToString(), "(to) " + reader["Target"].ToString(), (DateTime)reader["Time"]);
+                        msg.AssembleFullMessage();
+                        SendMessage(msg);
+                    }
+                    else if (reader["Target"].ToString() == "all")
+                    {
+                        msg = new Message(reader["Content"].ToString(), reader["Sender"].ToString(), (DateTime)reader["Time"]);
+                        msg.AssembleFullMessage();
+                        SendMessage(msg);
+                    }
+
+                }
+            }
+            reader.Close();
+        }
         
         private void Chat()
         {
@@ -384,6 +444,7 @@ namespace chat_server
             bool chatting = true;
 
             SendMessage(new Message("Enter name: ", "announcer"));
+
             while (askingForName)
             {
                 dataFromClient_ = GetMessage();
@@ -392,7 +453,6 @@ namespace chat_server
                     if (Program.ValidNewName(dataFromClient_)){
                         Console.WriteLine("Name registered: " + this.Name_);
                         SetNewName(dataFromClient_);
-                        Program.Broadcast(new Message("[" + this.Name_ + "] has entered the chat.", "announcer"));
                         askingForName = false;
                     }
                     else
@@ -401,6 +461,9 @@ namespace chat_server
                     }
                 }
             }
+
+            ReadHistory();
+            Program.Broadcast(new Message("[" + this.Name_ + "] has entered the chat.", "announcer"));
 
             string messageMode = null;
             string whisperTarget = null;
@@ -435,8 +498,6 @@ namespace chat_server
                     chatting = false;
                     
                     Program.RemoveThisClient(this.Name_);
-                    this.ClientSocket_.Close();
-                    Program.Broadcast(new Message("[" + this.Name_ + "] has left the chat.", "announcer"));
                 }
             } // end while chatting
         } // end Chat
