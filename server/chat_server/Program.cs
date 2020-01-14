@@ -67,7 +67,7 @@ namespace chat_server
     {
         
         static Dictionary<string, ClientHandler> clients = new Dictionary<string, ClientHandler>();
-        private static string SqlLoginString = "server=localhost; userid=root; password=Mbmbmb999999999; database=kurs";
+        private static string SqlLoginString = "server=localhost; userid=root; password=WhatsupSlappers; database=kurs";
         private static MySqlConnection SqlConnection;
 
         public static void UpdateClientDictionary(string oldID, string newName)
