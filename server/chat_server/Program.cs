@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Text.RegularExpressions;
+using MySql.Data.MySqlClient;
 
 namespace chat_server
 {
@@ -26,18 +27,26 @@ namespace chat_server
     {
 
         public string Content_;
-        public string Date_;
         public string FullMessage_;
         public string Originator_;
         public string Target_;
         public string Fix_;
+        public DateTime Time_;
 
         public Message(string content, string originator, string target = "all")
         {
             this.Content_ = content;
             this.Originator_ = originator;
             this.Target_ = target;
-            AddTimeToMessage();
+            this.Time_ = DateTime.Now;
+        }
+
+        public Message(string content, string originator, DateTime time, string target = "all")
+        {
+            this.Content_ = content;
+            this.Originator_ = originator;
+            this.Target_ = target;
+            this.Time_ = time;
         }
 
         public void AddFix(string fix)
@@ -46,16 +55,10 @@ namespace chat_server
             AssembleFullMessage();
         }
 
-        private void AddTimeToMessage()
+        public void AssembleFullMessage()
         {
-            DateTime myDateTime = DateTime.Now;
-            this.Date_ = myDateTime.ToString("yyyy-MM-dd HH:mm:ss");
-            AssembleFullMessage();
-        }
-
-        private void AssembleFullMessage()
-        {
-            FullMessage_ = Content_.Insert(0, "[" + Date_ + "] " + Originator_ + Fix_ + ": ");
+            string time = Time_.ToString("yyyy-MM-dd HH:mm:ss");
+            FullMessage_ = Content_.Insert(0, "[" + time + "] " + Originator_ + Fix_ + ": ");
         }
     }
 
@@ -64,13 +67,19 @@ namespace chat_server
     {
         
         static Dictionary<string, ClientHandler> clients = new Dictionary<string, ClientHandler>();
-
+        private static string SqlLoginString = "server=localhost; userid=root; password=Mbmbmb999999999; database=kurs";
+        private static MySqlConnection SqlConnection;
 
         public static void UpdateClientDictionary(string oldID, string newName)
         {
             ClientHandler cli = clients[oldID];
-            MyExtensions.RenameKey/*<string, ClientHandler>*/(clients, oldID, newName);
+            MyExtensions.RenameKey(clients, oldID, newName);
 
+        }
+
+        public static void RemoveThisClient(string name)
+        {
+            clients.Remove(name);
         }
 
         public static bool ValidNewName(string name)
@@ -91,11 +100,12 @@ namespace chat_server
 
         public static void Broadcast(Message message)
         {
+            SqlInsertMessage(message);
             foreach (var cli in clients)
             {
                 if (!cli.Value.SendMessage(message))
                 {
-                    Console.WriteLine("Could not send \"" + message + "\" to " + cli.Value.GetName());
+                    Console.WriteLine("Could not send message to " + cli.Value.GetName());
                 }
             }
 
@@ -103,9 +113,9 @@ namespace chat_server
         
         public static bool Whisper(Message message)
         {
-
             if (clients.ContainsKey(message.Target_))
             {
+                SqlInsertMessage(message);
                 message.AddFix("whispers");
 
                 if (clients[message.Target_].SendMessage(message))
@@ -198,11 +208,47 @@ namespace chat_server
                 clients[id.ToString()] = client;
                 Console.WriteLine("New client");
             }
+        }
 
+        static void SqlInsertMessage(Message message)
+        {
+            string sqlQuery = "INSERT INTO message(Sender, Content, Target, Time) VALUES("
+                            + "@s, "
+                            + "@c, "
+                            + "@ta, "
+                            + "@t"
+                            + ")";
+
+            try
+            {
+                MySqlCommand command = new MySqlCommand(sqlQuery, SqlConnection);
+                command.Parameters.AddWithValue("@s", message.Originator_);
+                command.Parameters.AddWithValue("@c", message.Content_);
+                command.Parameters.AddWithValue("@ta", message.Target_);
+                command.Parameters.AddWithValue("@t", message.Time_);
+                command.ExecuteNonQuery();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.ToString());
+            }
+
+        }
+
+        static void GetHistory(string clientName)
+        {
+
+        }
+
+        static void InitiateSQL()
+        {
+            SqlConnection = new MySqlConnection(SqlLoginString);
+            SqlConnection.Open();
         }
 
         static void Main(string[] args)
         {
+            InitiateSQL();
             ExecuteServer();
         }
 
@@ -253,7 +299,6 @@ namespace chat_server
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.ToString());
                 return null;
             }
         }
@@ -265,6 +310,7 @@ namespace chat_server
 
             try
             {
+                message.AssembleFullMessage();
                 sendBuffer = Encoding.UTF8.GetBytes(message.FullMessage_);
                 NetworkStream stream = ClientSocket_.GetStream();
                 stream.Write(sendBuffer, 0, sendBuffer.Length);
@@ -382,10 +428,17 @@ namespace chat_server
                             whisperContent = dataFromClient_.Remove(0, secondSpaceIndex + 1);
                             Program.Whisper(new Message(whisperContent, this.Name_, whisperTarget));
                         }
-                    }
+                    } // end iffing messageMode
+                } // end if dataFromClient_ != null
+                else
+                {
+                    chatting = false;
+                    
+                    Program.RemoveThisClient(this.Name_);
+                    this.ClientSocket_.Close();
+                    Program.Broadcast(new Message("[" + this.Name_ + "] has left the chat.", "announcer"));
                 }
-            }
-
-        }
-    }
+            } // end while chatting
+        } // end Chat
+    } // end ClientHandler
 }
