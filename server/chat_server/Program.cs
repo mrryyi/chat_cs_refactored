@@ -72,6 +72,18 @@ namespace chat_server
         private static string SqlLoginString = "server=localhost; userid=root; password=WhatsupSlappers; database=kurs";
         private static MySqlConnection SqlConnection;
 
+        static void Main(string[] args)
+        {
+            InitiateSQL();
+            ExecuteServer();
+        }
+
+        static void InitiateSQL()
+        {
+            SqlConnection = new MySqlConnection(SqlLoginString);
+            SqlConnection.Open();
+        }
+
         public static void UpdateClientDictionary(string oldID, string newName)
         {
             ClientHandler cli = clients[oldID];
@@ -81,8 +93,9 @@ namespace chat_server
 
         public static void RemoveThisClient(string name)
         {
-            Program.Broadcast(new Message("[" + name + "] has left the chat.", "announcer"));
             clients.Remove(name);
+            Console.WriteLine("Client " + name + " disconnect. Removing from list.");
+            Program.Broadcast(new Message("[" + name + "] has left the chat.", "announcer"));
         }
 
         public static bool NameIsInUserDatabase(string name)
@@ -132,21 +145,34 @@ namespace chat_server
             return online;
         }
 
-        public static bool ValidNewName(string name)
+        public static bool ValidNameSyntax(string name)
+        {
+            bool validSyntax = true;
+
+            if (name.Length < 4 || name.Length > 45)
+            {
+                validSyntax = false;
+            }
+
+            string namePattern = "[^A-Za-z0-9]+";
+            Match match = Regex.Match(name, namePattern);
+
+            if (match.Success)
+            {
+                validSyntax = false;
+            }
+
+            return validSyntax;
+        }
+
+        public static bool ValidNewNameByExistingNames(string name)
         {
             bool valid = true;
-            if (!name.Contains(' '))
+            if (clients.ContainsKey(name))
             {
-                if (clients.ContainsKey(name))
-                {
-                    valid = false;
-                }
-                else if (NameIsInUserDatabase(name)) {
-                    valid = false;
-                    Console.WriteLine("name is in database");
-                }
+                valid = false;
             }
-            else
+            else if (NameIsInUserDatabase(name))
             {
                 valid = false;
             }
@@ -156,7 +182,7 @@ namespace chat_server
 
         public static bool NameExists(string name)
         {
-            return !ValidNewName(name);
+            return !ValidNewNameByExistingNames(name);
         }
 
         public static void Broadcast(Message message)
@@ -481,20 +507,6 @@ namespace chat_server
             return verified;
         }
 
-        
-
-        static void InitiateSQL()
-        {
-            SqlConnection = new MySqlConnection(SqlLoginString);
-            SqlConnection.Open();
-        }
-
-        static void Main(string[] args)
-        {
-            InitiateSQL();
-            ExecuteServer();
-        }
-
     }
 
     class ClientHandler
@@ -554,7 +566,7 @@ namespace chat_server
                 return data;
 
             }
-            catch (Exception ex)
+            catch
             {
                 return null;
             }
@@ -578,6 +590,7 @@ namespace chat_server
             catch (InvalidOperationException ex)
             {
                 Console.WriteLine(ex.ToString());
+                Console.WriteLine("_____" + message.FullMessage_ + "_____");
                 Console.WriteLine("Disconnecting client: " + this.Name_);
                 Quit();
                 return false;
@@ -587,11 +600,6 @@ namespace chat_server
                 return false;
             }
 
-        }
-
-        public bool IsValidName(string nameCandidate)
-        {
-            return nameCandidate != Name_;
         }
 
         private void SetNewName(string newName)
@@ -619,7 +627,6 @@ namespace chat_server
                 {
                     return "whisper";
                 }
-
                 
             }
             else
@@ -644,7 +651,6 @@ namespace chat_server
         {
             if (message.Contains(' '))
             {
-
                 if (Program.NameExists(message.Split(' ')[1]))
                 {
                     return message.Split(' ')[1];
@@ -735,17 +741,28 @@ namespace chat_server
         {
             SendMessage(new Message("Create username: ", "CreatorBot"));
             tempName = GetMessage();
-            if (Program.ValidNewName(tempName))
+
+            bool success = false;
+
+            if (Program.ValidNameSyntax(tempName))
             {
-                string password = GetCreatePassword();
-                Program.CreateUser(tempName, password);
-                return true;
+                if (Program.ValidNewNameByExistingNames(tempName))
+                {
+                    string password = GetCreatePassword();
+                    Program.CreateUser(tempName, password);
+                    success = true;
+                }
+                else
+                {
+                    SendMessage(new Message("Name already exists. Enter name: ", "CreatorBot"));
+                }
             }
             else
             {
-                SendMessage(new Message("Name already exists. Enter name: ", "CreatorBot"));
-                return false;
+                SendMessage(new Message("Invalid syntax. Only letters and numbers!", "Annoyed CreatorBot"));
             }
+
+            return success;
         }
 
         private bool LoggingIn () {
