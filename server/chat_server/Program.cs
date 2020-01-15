@@ -4,7 +4,9 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Collections.Generic;
 using System.Linq;
+using Newtonsoft.Json.Linq;
 using System.Text;
+using System.IO;
 using System.Threading.Tasks;
 using System.Text.RegularExpressions;
 using MySql.Data.MySqlClient;
@@ -83,10 +85,68 @@ namespace chat_server
             clients.Remove(name);
         }
 
+        public static bool NameIsInUserDatabase(string name)
+        {
+            string sqlQuery = "SELECT COUNT(*) AS Count FROM user WHERE Name=@name";
+            bool isInDatabase = false;
+            try
+            {
+                MySqlCommand command = new MySqlCommand(sqlQuery, SqlConnection);
+                command.Parameters.AddWithValue("@name", name);
+                MySqlDataReader reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+
+                    Console.Write("_______READER.READ_______: ");
+                    Console.WriteLine(reader["Count"].ToString());
+                    if (reader["Count"].ToString() != "0")
+                    {
+
+                        Console.WriteLine("_______IS IN DATABASE_______");
+                        isInDatabase = true;
+                    }
+                }
+                reader.Close();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.ToString());
+            }
+
+            return isInDatabase;
+        }
+
+        public static bool IsValidPassword(string pw)
+        {
+            return true;
+        }
+
+        public static bool UserOnline(string name)
+        {
+            bool online = false;
+            if (clients.ContainsKey(name))
+            {
+                online = true;
+            }
+
+            return online;
+        }
+
         public static bool ValidNewName(string name)
         {
             bool valid = true;
-            if (clients.ContainsKey(name) && !name.Contains(' '))
+            if (!name.Contains(' '))
+            {
+                if (clients.ContainsKey(name))
+                {
+                    valid = false;
+                }
+                else if (NameIsInUserDatabase(name)) {
+                    valid = false;
+                    Console.WriteLine("name is in database");
+                }
+            }
+            else
             {
                 valid = false;
             }
@@ -104,9 +164,12 @@ namespace chat_server
             SqlInsertMessage(message);
             foreach (var cli in clients)
             {
-                if (!cli.Value.SendMessage(message))
+                if (cli.Value.IsAuthenticated())
                 {
-                    Console.WriteLine("Could not send message to " + cli.Value.GetName());
+                    if (!cli.Value.SendMessage(message))
+                    {
+                        Console.WriteLine("Could not send message to " + cli.Value.GetName());
+                    }
                 }
             }
 
@@ -114,14 +177,23 @@ namespace chat_server
         
         public static bool Whisper(Message message)
         {
-            if (clients.ContainsKey(message.Target_))
+            // If user exists in database.
+            if (NameIsInUserDatabase(message.Target_))
             {
                 SqlInsertMessage(message);
-                message.AddFix("whispers");
+            }
 
-                if (clients[message.Target_].SendMessage(message))
+            // If user is online, basically.
+            if (clients.ContainsKey(message.Target_))
+            {
+                if (clients[message.Target_].IsAuthenticated())
                 {
-                    return true;
+                    message.AddFix("whispers");
+
+                    if (clients[message.Target_].SendMessage(message))
+                    {
+                        return true;
+                    }
                 }
             }
 
@@ -181,6 +253,97 @@ namespace chat_server
             return port;
         }
 
+        static string GetWebData(string urlAddress)
+        {
+            string webData = null;
+
+            //try the URI, fail out if not successful 
+
+            HttpWebRequest request;
+            HttpWebResponse response;
+
+
+            try
+            {
+                request = (HttpWebRequest)WebRequest.Create(urlAddress);
+                //request.Headers["Accept"] = "application/json";
+                response = (HttpWebResponse)request.GetResponse();
+            }
+
+            catch (Exception e)
+            {
+                Console.WriteLine(e.ToString());
+                //this could be modified for specific responses if needed
+                return null;
+            }
+
+            if (response.StatusCode == HttpStatusCode.OK)
+            {
+                Console.WriteLine("_____HTTP OK");
+                Stream receiveStream = response.GetResponseStream();
+                StreamReader readStream = null;
+                if (response.CharacterSet == null)
+                {
+                    readStream = new StreamReader(receiveStream);
+                }
+                else
+                {
+                    readStream = new StreamReader(receiveStream, Encoding.GetEncoding(response.CharacterSet));
+                }
+
+                webData = readStream.ReadToEnd();
+
+                response.Close();
+                readStream.Close();
+            }
+            return webData;
+        }
+
+        static void ChatBot()
+        {
+
+            DateTime nowTime = DateTime.Now;
+            string description = "";
+            string main = "";
+            float temperature;
+            string wholeWeather = "";
+            
+            while (true)
+            {
+                nowTime = DateTime.Now;
+                if (nowTime.Minute % 5 == 0) {
+                    Console.WriteLine("_____ATTEMPTING TO GET WEATHER_____");
+                    string data = GetWebData("http://api.openweathermap.org/data/2.5/weather?q=Stockholm&appid=c5ee71f83ab0dcefd4908cad281a0597&units=metric");
+                    if (data != null)
+                    {
+                        Console.WriteLine("_____DATA != NULL");
+                        JObject o = JObject.Parse(data);
+                        description = o["weather"][0]["description"].Value<String>();
+                        main = o["weather"][0]["main"].Value<String>();
+                        temperature = o["main"]["temp"].Value<float>();
+                        wholeWeather = "Stockholm suffers from "
+                                       + description
+                                       + ", at a temperature of "
+                                       + temperature.ToString()
+                                       + "C.";
+                        Console.WriteLine(wholeWeather);
+                        Broadcast(new Message(wholeWeather, "WeatherBot"));
+                        Thread.Sleep(300000 - 2000);
+                    }
+                    else
+                    {
+                        Console.WriteLine("_____DATA == NULL");
+                    }
+                    
+                }
+                else
+                {
+                    Thread.Sleep(1000);
+                }
+
+            }
+        }
+
         static void ExecuteServer()
         {
 
@@ -188,13 +351,22 @@ namespace chat_server
             int port = GetPort();
 
             IPHostEntry hostIPEntry = Dns.GetHostEntry(Dns.GetHostName());
-            IPAddress localAddr = hostIPEntry.AddressList[0];
-            localAddr = IPAddress.Parse("127.0.0.1");
+            IPAddress localAddr = hostIPEntry.AddressList[1];
+
+            foreach (var addr in hostIPEntry.AddressList)
+            {
+                Console.WriteLine(addr.ToString());
+            }
+            
+            //localAddr = IPAddress.Parse("127.0.0.1");
             Console.WriteLine(localAddr.ToString());
-            TcpListener serverSocket = new TcpListener(localAddr, 1234);
+            TcpListener serverSocket = new TcpListener(localAddr, port);
+
             TcpClient clientSocket = default(TcpClient);
 
             serverSocket.Start();
+            Thread chatBotThread = new Thread(ChatBot);
+            chatBotThread.Start();
             
             ClientHandler client;
 
@@ -236,6 +408,29 @@ namespace chat_server
 
         }
 
+        public static bool CreateUser(string name, string password)
+        {
+            string sqlQuery = "INSERT INTO user(Name, Password) VALUES("
+                            + "@name, "
+                            + "@password"
+                            + ")";
+
+            try
+            {
+                MySqlCommand command = new MySqlCommand(sqlQuery, SqlConnection);
+                command.Parameters.AddWithValue("@name", name);
+                command.Parameters.AddWithValue("@password", password);
+                command.ExecuteNonQuery();
+                Console.WriteLine("______CREATE USER_______");
+                return true;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.ToString());
+            }
+            return false;
+        }
+
         public static MySqlDataReader GetTodayHistory(string clientName)
         {
             if (clients.ContainsKey(clientName)) {
@@ -257,6 +452,36 @@ namespace chat_server
 
             return null;
         }
+        
+        public static bool LoginVerification(string username, string password)
+        {
+
+            bool verified = false;
+
+            try
+            {
+                string sqlQuery = "SELECT * FROM user WHERE (Name=@name AND Password=@pass)";
+
+                MySqlCommand command = new MySqlCommand(sqlQuery, SqlConnection);
+                command.Parameters.AddWithValue("@name", username);
+                command.Parameters.AddWithValue("@pass", password);
+                MySqlDataReader reader = command.ExecuteReader();
+                if (reader.HasRows)
+                {
+                    Console.WriteLine("_______LOGIN VERIFIED_______");
+                    verified = true;
+                }
+                reader.Close();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.ToString());
+            }
+
+            return verified;
+        }
+
+        
 
         static void InitiateSQL()
         {
@@ -278,13 +503,10 @@ namespace chat_server
         string Id_;
         string Name_;
 
+        private bool Authenticated_ = false;
         private byte[] recvBuffer_ = new byte[1024];
         private string dataFromClient_;
-        
-        public string GetName()
-        {
-            return Name_;
-        }
+        private bool chatting = false;
 
         public ClientHandler(TcpClient clientSocket, string id)
         {
@@ -292,10 +514,22 @@ namespace chat_server
             this.Id_ = id;
         }
 
+        public ClientHandler() { }
+
         public void StartChat()
         {
             Thread chatThread = new Thread(Chat);
             chatThread.Start();
+        }
+
+        public bool IsAuthenticated()
+        {
+            return Authenticated_;
+        }
+
+        public string GetName()
+        {
+            return Name_;
         }
 
         public void StopSocket()
@@ -341,12 +575,18 @@ namespace chat_server
                 Thread.Sleep(1); // So that the clients don't receive multiple messages.
                 return true;
             }
-            catch (Exception ex)
+            catch (InvalidOperationException ex)
             {
                 Console.WriteLine(ex.ToString());
+                Console.WriteLine("Disconnecting client: " + this.Name_);
+                Quit();
                 return false;
             }
-            
+            catch (Exception ex)
+            {
+                return false;
+            }
+
         }
 
         public bool IsValidName(string nameCandidate)
@@ -360,11 +600,17 @@ namespace chat_server
             Program.UpdateClientDictionary(this.Id_, newName);
         }
 
+        private void Quit()
+        {
+            chatting = false;
+            Program.RemoveThisClient(this.Name_);
+        }
+
         private string AnalyzeMessage(string message)
         {
 
             string key;
-            
+
             if (message.Contains(' '))
             {
                 key = message.Split(' ')[0];
@@ -374,20 +620,27 @@ namespace chat_server
                     return "whisper";
                 }
 
-                if (key == "/d")
-                {
-                    return "date";
-                }
+                
             }
             else
             {
                 key = message;
             }
 
+            if (key == "/d")
+            {
+                return "date";
+            }
+
+            if (key == "/quit" || key == "/q" || key == "/disconnect")
+            {
+                return "quit";
+            }
+
             return "broadcast";
         }
 
-        static private string GetWhisperTarget (string message)
+        static private string GetWhisperTarget(string message)
         {
             if (message.Contains(' '))
             {
@@ -410,7 +663,7 @@ namespace chat_server
                 DateTime timeTemp;
                 while (reader.Read())
                 {
-                    timeTemp = (DateTime) reader["Time"];
+                    timeTemp = (DateTime)reader["Time"];
                     //Console
 
                     if (reader["Target"].ToString() == this.Name_)
@@ -431,39 +684,126 @@ namespace chat_server
                         msg.AssembleFullMessage();
                         SendMessage(msg);
                     }
+                }
+                reader.Close();
+            }
+        }
 
+        private bool GetLoginOption()
+        {
+
+            SendMessage(new Message("You need to log in or create an account.", "LoginBot"));
+            Thread.Sleep(4);
+            SendMessage(new Message("1: Login", "LoginBot"));
+            Thread.Sleep(4);
+            SendMessage(new Message("2: Create Account", "LoginBot"));
+
+            int input;
+            bool isNumeric = false;
+            while (true)
+            {
+                dataFromClient_ = GetMessage();
+                isNumeric = int.TryParse(dataFromClient_, out input);
+                if (isNumeric)
+                {
+                    if (input == 1)
+                    {
+                        return false;
+                    }
+                    else if (input == 2)
+                    {
+                        return true;
+                    }
                 }
             }
-            reader.Close();
+        }
+
+        private string GetCreatePassword()
+        {
+            SendMessage(new Message("Create password:", "CreatorBot"));
+
+            do
+            {
+                dataFromClient_ = GetMessage();
+
+            } while (!Program.IsValidPassword(dataFromClient_));
+
+            return dataFromClient_;
+        }
+
+        private bool InputCreateUser(ref string tempName, ref string tempPassword)
+        {
+            SendMessage(new Message("Create username: ", "CreatorBot"));
+            tempName = GetMessage();
+            if (Program.ValidNewName(tempName))
+            {
+                string password = GetCreatePassword();
+                Program.CreateUser(tempName, password);
+                return true;
+            }
+            else
+            {
+                SendMessage(new Message("Name already exists. Enter name: ", "CreatorBot"));
+                return false;
+            }
+        }
+
+        private bool LoggingIn () {
+            bool creatingAccount = false;
+            string tempName = null;
+            string tempPassword = null;
+
+
+            while (!this.Authenticated_)
+            {
+                creatingAccount = GetLoginOption();
+                if (creatingAccount)
+                {
+                    this.Authenticated_ = InputCreateUser(ref tempName, ref tempPassword);
+                }
+                
+                if (!this.Authenticated_ && !creatingAccount)
+                {
+                    SendMessage(new Message("Enter username: ", "LoginBot"));
+                    tempName = GetMessage();
+                    if (dataFromClient_ != null)
+                    {
+                        if (Program.NameIsInUserDatabase(tempName))
+                        {
+                            SendMessage(new Message("Enter password: ", "LoginBot"));
+                            tempPassword = GetMessage();
+
+                            if (Program.LoginVerification(tempName, tempPassword))
+                            {
+                                this.Authenticated_ = true;
+                            }
+                        }
+                        else
+                        {
+                            SendMessage(new Message("Invalid username.", "LoginBot"));
+                        }
+                    }
+                }
+            }
+
+            if (this.Authenticated_)
+            {
+                SetNewName(tempName);
+                return true;
+            }
+
+            return false;
         }
         
         private void Chat()
         {
 
-            bool askingForName = true;
-            bool chatting = true;
-
-            SendMessage(new Message("Enter name: ", "announcer"));
-
-            while (askingForName)
+            if (LoggingIn())
             {
-                dataFromClient_ = GetMessage();
-                if (dataFromClient_ != null)
-                {
-                    if (Program.ValidNewName(dataFromClient_)){
-                        Console.WriteLine("Name registered: " + this.Name_);
-                        SetNewName(dataFromClient_);
-                        askingForName = false;
-                    }
-                    else
-                    {
-                        SendMessage(new Message("Name already exists. Enter name: ", "announcer"));
-                    }
-                }
+                ReadHistory();
+                Program.Broadcast(new Message("[" + this.Name_ + "] has entered the chat.", "announcer"));
+                chatting = true;
             }
-
-            ReadHistory();
-            Program.Broadcast(new Message("[" + this.Name_ + "] has entered the chat.", "announcer"));
 
             string messageMode = null;
             string whisperTarget = null;
@@ -487,17 +827,28 @@ namespace chat_server
                         whisperTarget = split[1];
                         if (Program.NameExists(whisperTarget) && split.Length > 2)
                         {
-                            secondSpaceIndex = dataFromClient_.IndexOf(' ', dataFromClient_.IndexOf(' ') + 1 );
+                            secondSpaceIndex = dataFromClient_.IndexOf(' ', dataFromClient_.IndexOf(' ') + 1);
                             whisperContent = dataFromClient_.Remove(0, secondSpaceIndex + 1);
                             Program.Whisper(new Message(whisperContent, this.Name_, whisperTarget));
+                            
+                            Message toSender = new Message(whisperContent, "To " + whisperTarget);
+                            if (!Program.UserOnline(whisperTarget))
+                            {
+                                Console.WriteLine("USER NOT ONLINE");
+                                toSender.AddFix("(offline)");
+                            }
+
+                            SendMessage(toSender);
                         }
-                    } // end iffing messageMode
+                    }
+                    else if (messageMode == "quit")
+                    {
+                        Quit();
+                    }// end iffing messageMode
                 } // end if dataFromClient_ != null
                 else
                 {
-                    chatting = false;
-                    
-                    Program.RemoveThisClient(this.Name_);
+                    Quit();
                 }
             } // end while chatting
         } // end Chat

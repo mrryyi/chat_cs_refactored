@@ -27,7 +27,7 @@ namespace chat_csharp_refactored
         private bool hostIPSet_ = false;
         private bool portSet_ = false;
 
-        private bool encryptedMode_ = true;
+        private bool encryptedMode_ = false;
         private bool temporaryNoEncryptMode_ = false;
 
         private bool connected_ = false;
