@@ -35,6 +35,7 @@ namespace chat_server
         public string Fix_;
         public DateTime Time_;
 
+        // Constructs message with time to default to server time.
         public Message(string content, string originator, string target = "all")
         {
             this.Content_ = content;
@@ -43,6 +44,7 @@ namespace chat_server
             this.Time_ = DateTime.Now;
         }
 
+        // Constructs message with time set to a known DateTime.
         public Message(string content, string originator, DateTime time, string target = "all")
         {
             this.Content_ = content;
@@ -57,6 +59,7 @@ namespace chat_server
             AssembleFullMessage();
         }
 
+        // Assembles the message, combining dateTime, sender and an optional fix (like whispers)
         public void AssembleFullMessage()
         {
             string time = Time_.ToString("yyyy-MM-dd HH:mm:ss");
@@ -67,23 +70,112 @@ namespace chat_server
     
     class Program
     {
-        
+        // The dictionary that contains connected clients.
         static Dictionary<string, ClientHandler> clients = new Dictionary<string, ClientHandler>();
+
+        // The one SQL login string.
         private static string SqlLoginString = "server=localhost; userid=root; password=WhatsupSlappers; database=kurs";
+
+        // The only used MySqlConnection variable. Bad implementation when there needs to be several requests.
+        // Could make a new connection per request, in future versions.
         private static MySqlConnection SqlConnection;
 
         static void Main(string[] args)
         {
             InitiateSQL();
+            CreateTablesIfNotExists();
             ExecuteServer();
         }
 
+        // Opens the connection to the server.
         static void InitiateSQL()
         {
             SqlConnection = new MySqlConnection(SqlLoginString);
             SqlConnection.Open();
         }
 
+        // Creates databases if they do not exist.
+        static void CreateTablesIfNotExists()
+        {
+            MySqlCommand createTable;
+            
+            // Could remove "IF NOT EXISTS" and just handle the exception.
+            try
+            {
+                createTable = new MySqlCommand(@"CREATE TABLE IF NOT EXISTS `messages` ("
+                +"`Id` int(10) unsigned NOT NULL AUTO_INCREMENT,"
+                +"`Sender` varchar(45) NOT NULL,"
+                +"`Content` varchar(1024) NOT NULL,"
+                +"`Target` varchar(45) NOT NULL,"
+                +"`Time` datetime NOT NULL,"
+                +"PRIMARY KEY (`Id`)"
+                +") ENGINE=InnoDB AUTO_INCREMENT=357 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", SqlConnection);
+
+                createTable.ExecuteNonQuery();
+            }
+            catch{}
+
+            try
+            {
+
+                createTable = new MySqlCommand(@"CREATE TABLE IF NOT EXISTS `users` ("
+                  + "`Id` int(10) unsigned NOT NULL AUTO_INCREMENT,"
+                  + "`Name` varchar(45) NOT NULL,"
+                  + "`Password` varchar(45) NOT NULL,"
+                  + "PRIMARY KEY (`Id`),"
+                  + "UNIQUE KEY `Name_UNIQUE` (`Name`)"
+                  + ") ENGINE=InnoDB AUTO_INCREMENT=6 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", SqlConnection);
+
+                createTable.ExecuteNonQuery();
+            }
+            catch{}
+        }
+
+        // The main function that serves to connect clients.
+        static void ExecuteServer()
+        {
+
+            int maxHosts = InputMaxHosts();
+            int port = InputPort();
+
+            IPHostEntry hostIPEntry = Dns.GetHostEntry(Dns.GetHostName());
+            IPAddress localAddr = hostIPEntry.AddressList[1];
+            
+            //localAddr = IPAddress.Parse("127.0.0.1");
+            Console.WriteLine(localAddr.ToString());
+            TcpListener serverSocket = new TcpListener(localAddr, port);
+
+            TcpClient clientSocket = default(TcpClient);
+
+            serverSocket.Start();
+            Thread chatBotThread = new Thread(ChatBot);
+            chatBotThread.Start();
+
+            ClientHandler client;
+
+            bool going = true;
+            int id = 0;
+            while (going)
+            {
+                id++;
+                if (clients.Count < maxHosts)
+                {
+                    clientSocket = serverSocket.AcceptTcpClient();
+                    client = new ClientHandler(clientSocket, id.ToString());
+                    client.StartChat();
+                    // Temporary key for the client, such that we can refer to them
+                    // in the code before they give a name. Clients online will be found using
+                    // the name of the user like so: clients[name].
+                    // At this point, the client has no name, just a key in this dictionary.
+                    clients[id.ToString()] = client;
+                }
+            }
+        }
+
+
+        // Basically changes the name from a temporary ID to their name.
+        // Makes a copy, calls RenameKey which deletes the old one and 
+        // inserts the copy with the new name.
         public static void UpdateClientDictionary(string oldID, string newName)
         {
             ClientHandler cli = clients[oldID];
@@ -91,17 +183,25 @@ namespace chat_server
 
         }
 
+        // Removes client from the list of connected clients.
+        // Does not need to be an authenticated client.
         public static void RemoveThisClient(string name)
         {
-            clients.Remove(name);
-            Console.WriteLine("Client " + name + " disconnect. Removing from list.");
-            Program.Broadcast(new Message("[" + name + "] has left the chat.", "announcer"));
+            if (ClientConnected(name))
+            {
+                clients.Remove(name);
+                Console.WriteLine("Client " + name + " disconnect. Removing from list.");
+                Program.Broadcast(new Message("(" + name + ") has left the chat.", "Announcer"));
+            }
         }
 
+        // Gets the count from users table for every Name==(parameter name)
+        // Returns true if count != 0.
         public static bool NameIsInUserDatabase(string name)
         {
-            string sqlQuery = "SELECT COUNT(*) AS Count FROM user WHERE Name=@name";
+            string sqlQuery = "SELECT COUNT(*) AS Count FROM users WHERE Name=@name";
             bool isInDatabase = false;
+
             try
             {
                 MySqlCommand command = new MySqlCommand(sqlQuery, SqlConnection);
@@ -109,13 +209,10 @@ namespace chat_server
                 MySqlDataReader reader = command.ExecuteReader();
                 while (reader.Read())
                 {
-
-                    Console.Write("_______READER.READ_______: ");
                     Console.WriteLine(reader["Count"].ToString());
+                    // Count, therefore the name exists in the user database.
                     if (reader["Count"].ToString() != "0")
                     {
-
-                        Console.WriteLine("_______IS IN DATABASE_______");
                         isInDatabase = true;
                     }
                 }
@@ -129,22 +226,37 @@ namespace chat_server
             return isInDatabase;
         }
 
-        public static bool IsValidPassword(string pw)
+        // Returns true if client 
+        public static bool ClientConnected(string name)
         {
-            return true;
-        }
+            bool connected = false;
 
-        public static bool UserOnline(string name)
-        {
-            bool online = false;
+            //Online if in clients dictionary.
             if (clients.ContainsKey(name))
             {
-                online = true;
+                connected = true;
             }
 
-            return online;
+            return connected;
         }
 
+        // Returns true if password parameter is correct to the allowed syntax.
+        public static bool ValidPasswordSyntax(string pw)
+        {
+            bool validSyntax = true;
+
+            string passwordPattern = "^(?=.*\\d).{4,8}$";
+
+            Match match = Regex.Match(pw, passwordPattern);
+            if (!match.Success)
+            {
+                validSyntax = false;
+            }
+
+            return validSyntax;
+        }
+
+        // Returns true if name parameter is correct to the allowed syntax.
         public static bool ValidNameSyntax(string name)
         {
             bool validSyntax = true;
@@ -153,22 +265,26 @@ namespace chat_server
             {
                 validSyntax = false;
             }
+            else {
+                string namePattern = "[^A-Za-z0-9]+";
+                Match match = Regex.Match(name, namePattern);
 
-            string namePattern = "[^A-Za-z0-9]+";
-            Match match = Regex.Match(name, namePattern);
-
-            if (match.Success)
-            {
-                validSyntax = false;
+                if (match.Success)
+                {
+                    validSyntax = false;
+                }
             }
 
             return validSyntax;
         }
 
+        // Returns true if there is a connected client or
+        // registered user by the name of the parameter name.
         public static bool ValidNewNameByExistingNames(string name)
         {
             bool valid = true;
-            if (clients.ContainsKey(name))
+            
+            if (ClientConnected(name))
             {
                 valid = false;
             }
@@ -180,11 +296,15 @@ namespace chat_server
             return valid;
         }
 
+        // Recycles valid new name function such that if the parameter name
+        // is not valid for a new user, then it exists in the database.
+        // Returns true if user exists in database.
         public static bool NameExists(string name)
         {
             return !ValidNewNameByExistingNames(name);
         }
 
+        // Sends a message to every client that is authenticated (logged in).
         public static void Broadcast(Message message)
         {
             SqlInsertMessage(message);
@@ -201,6 +321,10 @@ namespace chat_server
 
         }
         
+        // Sends a private message to a target if they exist.
+        // Returns true if online and they got the message.
+        // If returns false, it means that the target client
+        // did not get it.
         public static bool Whisper(Message message)
         {
             // If user exists in database.
@@ -210,12 +334,13 @@ namespace chat_server
             }
 
             // If user is online, basically.
-            if (clients.ContainsKey(message.Target_))
+            if (ClientConnected(message.Target_))
             {
                 if (clients[message.Target_].IsAuthenticated())
                 {
                     message.AddFix("whispers");
 
+                    // True if no exception and the message got sent.
                     if (clients[message.Target_].SendMessage(message))
                     {
                         return true;
@@ -226,12 +351,14 @@ namespace chat_server
             return false;
         }
 
+        // Unimplemented.
         public static void DisplayMessagesFromDate(string date = "today")
         {
             Console.WriteLine("Display messages from that date, here.");
         }
 
-        static int GetMaxHosts()
+        // Get max hosts from input.
+        static int InputMaxHosts()
         {
             string input;
             int hostsDefault = 10;
@@ -258,7 +385,8 @@ namespace chat_server
             return hosts;
         }
 
-        static int GetPort()
+        // Get port from input.
+        static int InputPort()
         {
             string input;
             int port = 1234;
@@ -279,27 +407,23 @@ namespace chat_server
             return port;
         }
 
+        // Gets web data by HTTP protocol using parameter string URL.
+        // Returns null if unsuccessful.
         static string GetWebData(string urlAddress)
         {
             string webData = null;
 
-            //try the URI, fail out if not successful 
-
             HttpWebRequest request;
             HttpWebResponse response;
-
 
             try
             {
                 request = (HttpWebRequest)WebRequest.Create(urlAddress);
-                //request.Headers["Accept"] = "application/json";
                 response = (HttpWebResponse)request.GetResponse();
             }
-
             catch (Exception e)
             {
                 Console.WriteLine(e.ToString());
-                //this could be modified for specific responses if needed
                 return null;
             }
 
@@ -325,6 +449,7 @@ namespace chat_server
             return webData;
         }
 
+        // Just a chat bot that gets weaher every 5 minutes as a json file and broadcasts a summary to all clients.
         static void ChatBot()
         {
 
@@ -333,85 +458,51 @@ namespace chat_server
             string main = "";
             float temperature;
             string wholeWeather = "";
-            
+
             while (true)
             {
                 nowTime = DateTime.Now;
-                if (nowTime.Minute % 5 == 0) {
-                    Console.WriteLine("_____ATTEMPTING TO GET WEATHER_____");
+                if (nowTime.Minute % 5 == 0)
+                {
                     string data = GetWebData("http://api.openweathermap.org/data/2.5/weather?q=Stockholm&appid=c5ee71f83ab0dcefd4908cad281a0597&units=metric");
                     if (data != null)
                     {
-                        Console.WriteLine("_____DATA != NULL");
-                        JObject o = JObject.Parse(data);
-                        description = o["weather"][0]["description"].Value<String>();
-                        main = o["weather"][0]["main"].Value<String>();
-                        temperature = o["main"]["temp"].Value<float>();
-                        wholeWeather = "Stockholm suffers from "
-                                       + description
-                                       + ", at a temperature of "
-                                       + temperature.ToString()
-                                       + "C.";
-                        Console.WriteLine(wholeWeather);
-                        Broadcast(new Message(wholeWeather, "WeatherBot"));
-                        Thread.Sleep(300000 - 2000);
+                        try
+                        {
+                            JObject o = JObject.Parse(data);
+                            description  = o["weather"][0]["description"].Value<String>();
+                            main         = o["weather"][0]["main"].Value<String>();
+                            temperature  = o["main"]["temp"].Value<float>();
+                            wholeWeather = "Stockholm suffers from "
+                                           + description
+                                           + ", at a temperature of "
+                                           + temperature.ToString()
+                                           + "C.";
+
+                            Broadcast(new Message(wholeWeather, "Weather-announcer"));
+                            // Save resources for 4 minutes and 55 seconds.
+                            Thread.Sleep(300000 - 5000);
+                        }
+                        catch (Exception e)
+                        {
+                            Console.WriteLine(e.ToString());
+                        }
                     }
-                    else
-                    {
-                        Console.WriteLine("_____DATA == NULL");
-                    }
-                    
+
                 }
                 else
                 {
+                    // Try every second when checking.
                     Thread.Sleep(1000);
                 }
 
             }
         }
 
-        static void ExecuteServer()
-        {
-
-            int maxHosts = GetMaxHosts();
-            int port = GetPort();
-
-            IPHostEntry hostIPEntry = Dns.GetHostEntry(Dns.GetHostName());
-            IPAddress localAddr = hostIPEntry.AddressList[1];
-
-            foreach (var addr in hostIPEntry.AddressList)
-            {
-                Console.WriteLine(addr.ToString());
-            }
-            
-            //localAddr = IPAddress.Parse("127.0.0.1");
-            Console.WriteLine(localAddr.ToString());
-            TcpListener serverSocket = new TcpListener(localAddr, port);
-
-            TcpClient clientSocket = default(TcpClient);
-
-            serverSocket.Start();
-            Thread chatBotThread = new Thread(ChatBot);
-            chatBotThread.Start();
-            
-            ClientHandler client;
-
-            bool going = true;
-            int id = 0;
-            while (going)
-            {
-                id++;
-                clientSocket = serverSocket.AcceptTcpClient();
-                client = new ClientHandler(clientSocket, id.ToString());
-                client.StartChat();
-                clients[id.ToString()] = client;
-                Console.WriteLine("New client");
-            }
-        }
-
+        // Creates and inserts a message into the messages table in the connected database.
         static void SqlInsertMessage(Message message)
         {
-            string sqlQuery = "INSERT INTO message(Sender, Content, Target, Time) VALUES("
+            string sqlQuery = "INSERT INTO messages(Sender, Content, Target, Time) VALUES("
                             + "@s, "
                             + "@c, "
                             + "@ta, "
@@ -434,9 +525,10 @@ namespace chat_server
 
         }
 
+        // Creates and inserts a user with name and passowrd into the users table.
         public static bool CreateUser(string name, string password)
         {
-            string sqlQuery = "INSERT INTO user(Name, Password) VALUES("
+            string sqlQuery = "INSERT INTO users(Name, Password) VALUES("
                             + "@name, "
                             + "@password"
                             + ")";
@@ -447,7 +539,6 @@ namespace chat_server
                 command.Parameters.AddWithValue("@name", name);
                 command.Parameters.AddWithValue("@password", password);
                 command.ExecuteNonQuery();
-                Console.WriteLine("______CREATE USER_______");
                 return true;
             }
             catch (Exception e)
@@ -457,10 +548,15 @@ namespace chat_server
             return false;
         }
 
+        // Selects messages from the messages table by matching Target to parameter clientName
+        // or matching Target to "'all'" such that the client only gets messages intended for that client.
+        // Will get targeted messages and broadcasted messages.
+        // Returns reader if true, which could REALLY screw things up if the callers does NOT
+        // close the reader.
         public static MySqlDataReader GetTodayHistory(string clientName)
         {
             if (clients.ContainsKey(clientName)) {
-                string sqlQuery = "SELECT * FROM message WHERE (Target=@clientName OR Target='all') AND DATE(Time)=DATE(NOW()) ORDER BY Time ASC";
+                string sqlQuery = "SELECT * FROM messages WHERE (Target=@clientName OR Target='all') AND DATE(Time)=DATE(NOW()) ORDER BY Time ASC";
                 
                 try
                 {
@@ -479,6 +575,8 @@ namespace chat_server
             return null;
         }
         
+        // Checks if parameter name and password exists in database on the same row.
+        // Returns true if that is true.
         public static bool LoginVerification(string username, string password)
         {
 
@@ -486,7 +584,7 @@ namespace chat_server
 
             try
             {
-                string sqlQuery = "SELECT * FROM user WHERE (Name=@name AND Password=@pass)";
+                string sqlQuery = "SELECT * FROM users WHERE (Name=@name AND Password=@pass)";
 
                 MySqlCommand command = new MySqlCommand(sqlQuery, SqlConnection);
                 command.Parameters.AddWithValue("@name", username);
@@ -494,7 +592,6 @@ namespace chat_server
                 MySqlDataReader reader = command.ExecuteReader();
                 if (reader.HasRows)
                 {
-                    Console.WriteLine("_______LOGIN VERIFIED_______");
                     verified = true;
                 }
                 reader.Close();
@@ -519,13 +616,15 @@ namespace chat_server
         private byte[] recvBuffer_ = new byte[1024];
         private string dataFromClient_;
         private bool chatting = false;
-
+        
+        // Constructor that embeds a TcpClient.
         public ClientHandler(TcpClient clientSocket, string id)
         {
             this.ClientSocket_ = clientSocket;
             this.Id_ = id;
         }
 
+        // Default constructor.
         public ClientHandler() { }
 
         public void StartChat()
@@ -534,6 +633,9 @@ namespace chat_server
             chatThread.Start();
         }
 
+        // Basically "is logged in".
+        // Can exist in Program.clients dictionary, but
+        // would not be authenticated until logged in.
         public bool IsAuthenticated()
         {
             return Authenticated_;
@@ -549,6 +651,7 @@ namespace chat_server
             this.ClientSocket_.Close();
         }
 
+        // GetMessage which lstens to the client connection and returns string data unless exception.
         private string GetMessage()
         {
 
@@ -572,6 +675,7 @@ namespace chat_server
             }
         }
 
+        // Send message to the client that is connected to the socket instance in this ClientHandler.
         public bool SendMessage(Message message)
         {
 
@@ -584,36 +688,46 @@ namespace chat_server
                 NetworkStream stream = ClientSocket_.GetStream();
                 stream.Write(sendBuffer, 0, sendBuffer.Length);
                 Console.WriteLine("Sent \"" + message.FullMessage_ + "\" to " + this.Name_);
-                Thread.Sleep(1); // So that the clients don't receive multiple messages.
+                Thread.Sleep(4); // So that the clients don't receive multiple messages.
                 return true;
             }
             catch (InvalidOperationException ex)
             {
                 Console.WriteLine(ex.ToString());
-                Console.WriteLine("_____" + message.FullMessage_ + "_____");
                 Console.WriteLine("Disconnecting client: " + this.Name_);
                 Quit();
                 return false;
             }
-            catch (Exception ex)
+            catch
             {
                 return false;
             }
 
         }
 
+        // Sets a name for a client.
+        // Used only once to set the name to the user login name.
         private void SetNewName(string newName)
         {
             this.Name_ = newName;
             Program.UpdateClientDictionary(this.Id_, newName);
         }
 
+        // Removes client from online clients in Program.
+        // Sets chatting to false to quit the main loop.
+        // Sends a final message.
+        // Stops socket.
         private void Quit()
         {
             chatting = false;
             Program.RemoveThisClient(this.Name_);
+            StopSocket();
         }
 
+        // Finds commands from a user.
+        // If found command, then return a string with the speciality
+        // of the message the user sent.
+        // Default is broadcast.
         private string AnalyzeMessage(string message)
         {
 
@@ -647,6 +761,8 @@ namespace chat_server
             return "broadcast";
         }
 
+        // Just splits a "/w target..." string such that we return target.
+        // Doesn't mind if there is no message, we just get the target here.
         static private string GetWhisperTarget(string message)
         {
             if (message.Contains(' '))
@@ -660,6 +776,9 @@ namespace chat_server
             return null;
         }
 
+        // Gets the history for this day.
+        // Could be implemented to have parameter date and create another GetTodayHistory
+        // such that we can find any date.
         private void ReadHistory()
         {
             MySqlDataReader reader = Program.GetTodayHistory(this.Name_);
@@ -670,8 +789,8 @@ namespace chat_server
                 while (reader.Read())
                 {
                     timeTemp = (DateTime)reader["Time"];
-                    //Console
 
+                    // We only write history messages that are intended to the client. Whispers, or broadcasted (Target="all").
                     if (reader["Target"].ToString() == this.Name_)
                     {
                         msg = new Message(reader["Content"].ToString(), "(from) " + reader["Sender"].ToString(), (DateTime)reader["Time"]);
@@ -695,13 +814,12 @@ namespace chat_server
             }
         }
 
+        // Prompts the client to login or create account.
         private bool GetLoginOption()
         {
 
             SendMessage(new Message("You need to log in or create an account.", "LoginBot"));
-            Thread.Sleep(4);
             SendMessage(new Message("1: Login", "LoginBot"));
-            Thread.Sleep(4);
             SendMessage(new Message("2: Create Account", "LoginBot"));
 
             int input;
@@ -724,52 +842,65 @@ namespace chat_server
             }
         }
 
+        // Prompts the client to create a password for a user.
         private string GetCreatePassword()
         {
             SendMessage(new Message("Create password:", "CreatorBot"));
+            
+            dataFromClient_ = GetMessage();
 
-            do
+            if (Program.ValidPasswordSyntax(dataFromClient_))
             {
-                dataFromClient_ = GetMessage();
+                return dataFromClient_;
+            }
 
-            } while (!Program.IsValidPassword(dataFromClient_));
-
-            return dataFromClient_;
+            return null;
         }
 
+        // Get client input to create a user.
+        // Returns true if valid username (not used) and password has valid syntax.
         private bool InputCreateUser(ref string tempName, ref string tempPassword)
         {
+            bool success = false;
+
             SendMessage(new Message("Create username: ", "CreatorBot"));
             tempName = GetMessage();
-
-            bool success = false;
 
             if (Program.ValidNameSyntax(tempName))
             {
                 if (Program.ValidNewNameByExistingNames(tempName))
                 {
                     string password = GetCreatePassword();
-                    Program.CreateUser(tempName, password);
-                    success = true;
+
+                    if (password != null)
+                    {
+                        Program.CreateUser(tempName, password);
+                        success = true;
+                    }
+                    else
+                    {
+                        SendMessage(new Message("Password must be between 4 and 8 digits long and include at least one numeric digit.", "CreatorBot"));
+                    }
                 }
                 else
                 {
-                    SendMessage(new Message("Name already exists. Enter name: ", "CreatorBot"));
+                    SendMessage(new Message("Name already exists.", "CreatorBot"));
                 }
             }
             else
             {
-                SendMessage(new Message("Invalid syntax. Only letters and numbers!", "Annoyed CreatorBot"));
+                SendMessage(new Message("Invalid syntax. Only letters and numbers!", "CreatorBot"));
             }
 
             return success;
         }
 
+        // Clients get stuck in this loop until they are authenticated, either by creating a user 
+        // or by logging in to an existing one.
         private bool LoggingIn () {
             bool creatingAccount = false;
             string tempName = null;
             string tempPassword = null;
-
 
             while (!this.Authenticated_)
             {
@@ -803,8 +934,11 @@ namespace chat_server
                 }
             }
 
+            // Redundant if statement, it is true at this point if it broke the while loop, but why not.
             if (this.Authenticated_)
             {
+                // Sets the name for the client such that it can be referred to in 
+                // operations to send to ONLINE users.
                 SetNewName(tempName);
                 return true;
             }
@@ -815,10 +949,12 @@ namespace chat_server
         private void Chat()
         {
 
+            // Get the client logged in.
             if (LoggingIn())
             {
+                // When logged in, we read the history and then broadcast that we are hereö
                 ReadHistory();
-                Program.Broadcast(new Message("[" + this.Name_ + "] has entered the chat.", "announcer"));
+                Program.Broadcast(new Message("[" + this.Name_ + "] has entered the chat.", "Announcer"));
                 chatting = true;
             }
 
@@ -830,28 +966,37 @@ namespace chat_server
             
             while (chatting)
             {
+                // Listens to client.
                 dataFromClient_ = GetMessage();
                 if (dataFromClient_ != null)
                 {
+                    // Analyses message.
                     messageMode = AnalyzeMessage(dataFromClient_);
+                    // Broadcasts if mode is broadcast.
                     if (messageMode == "broadcast")
                     {
                         Program.Broadcast(new Message(dataFromClient_, this.Name_));
                     }
+                    // Whispers if mode is whisper.
                     else if (messageMode == "whisper")
                     {
                         split = dataFromClient_.Split(' ');
+                        // Who we whispers to. 
                         whisperTarget = split[1];
+
+                        // If there is a target in the database, and there is a message after the name.
                         if (Program.NameExists(whisperTarget) && split.Length > 2)
                         {
                             secondSpaceIndex = dataFromClient_.IndexOf(' ', dataFromClient_.IndexOf(' ') + 1);
+
+                            // Separates the content from the rest of the message.
                             whisperContent = dataFromClient_.Remove(0, secondSpaceIndex + 1);
-                            Program.Whisper(new Message(whisperContent, this.Name_, whisperTarget));
+                            bool successfulWhisper = Program.Whisper(new Message(whisperContent, this.Name_, whisperTarget));
                             
+                            // If we successfully whisper
                             Message toSender = new Message(whisperContent, "To " + whisperTarget);
-                            if (!Program.UserOnline(whisperTarget))
+                            if (!Program.ClientConnected(whisperTarget) || !successfulWhisper)
                             {
-                                Console.WriteLine("USER NOT ONLINE");
                                 toSender.AddFix("(offline)");
                             }
 

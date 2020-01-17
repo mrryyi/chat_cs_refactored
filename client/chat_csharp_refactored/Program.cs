@@ -81,6 +81,7 @@ namespace chat_csharp_refactored
             return encryptedMode_;
         }
 
+        // Sets the sender according to the IPAddress family as a stream over TCP.
         public void SetSender()
         {
             if (hostIPSet_) {
@@ -97,6 +98,7 @@ namespace chat_csharp_refactored
             }
         }
 
+        // Sets endpoint according to IP and port.
         public void SetEndPoint()
         {
             if (hostIPSet_ && portSet_)
@@ -112,12 +114,15 @@ namespace chat_csharp_refactored
             }
         }
         
+        // Sets the message to send to server and indicates to a thread that
+        // checks if a message is ready to send that a message is ready to send.
         public void SetMessage(string message)
         {
             msgToSend_ = message;
             readyToSend_ = true;
         }
 
+        // Encrypts bytes by adding value one to the message.
         private void Encrypt(ref byte[] msg, int maxBytes)
         {
             for (int i = 0; i < maxBytes; i++)
@@ -126,6 +131,9 @@ namespace chat_csharp_refactored
             }
         }
 
+        // Decrypts messages only if they are not whisper,,
+        // welcome, Enter, Weather or Username. This is made
+        // to work with Vidars server: https://github.com/GrodVidar/Haxr-Chat
         private void Decrypt(ref byte[] msg, int maxBytes)
         {
 
@@ -155,6 +163,9 @@ namespace chat_csharp_refactored
             }
         }
 
+        // Receives messages and just writes to console.
+        // Decrypts if decrypt mode.
+        // UTF8 standard.
         public void ThreadReceive()
         {
             byte[] recvBuffer = new byte[1024];
@@ -188,6 +199,8 @@ namespace chat_csharp_refactored
             }
         }
 
+        // Sends messages if ready to send.
+        // Encodes to UTF8.
         public void ThreadSend()
         {
 
@@ -206,8 +219,6 @@ namespace chat_csharp_refactored
                     {
                         Encrypt(ref bytemsg, bytemsg.Length);
                     }
-                    
-                    Console.WriteLine(Encoding.UTF8.GetString(bytemsg));
 
                     try
                     {
@@ -223,12 +234,14 @@ namespace chat_csharp_refactored
             }
         }
 
+        // Attempts to connect to a server.
         public bool TryConnect()
         {
             bool success = false;
 
             Console.WriteLine("Attempting to connect...");
 
+            // Only if we succeeded to set the connection information.
             if (senderSet_ && remoteEPSet_ && hostIPSet_ && portSet_)
             {
                 try
@@ -293,6 +306,7 @@ namespace chat_csharp_refactored
         static Chat chat;
         static string userInput;
 
+        // Uses a regex pattern to find if the input is an IP address. Returns true if so.
         static bool IsIP(string input)
         {
             string ipAddressPattern = "^(?=.*[^\\.]$)((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.?){4}$";
@@ -308,7 +322,12 @@ namespace chat_csharp_refactored
             }
         }
 
-        static bool GetIP(string input, ref IPAddress addr)
+        // Validates IP syntax and attempts to connect.
+        // IP is either valid syntax, or if the non-IP input resolves
+        // through a DNS to a valid IP, in which case we grab one of those IP addresses.
+        // So we can write a garbage non-connectable IP and it be correct and return true.
+        // It just means we have something we CAN attempt a connection to.
+        static bool ValidateIP(string input, ref IPAddress addr)
         {
             if (IsIP(input))
             {
@@ -336,6 +355,7 @@ namespace chat_csharp_refactored
             return true;
         }
 
+        // Gets port from user. Default is 1234.
         static int GetPort()
         {
             string input;
@@ -357,6 +377,8 @@ namespace chat_csharp_refactored
             return port;
         }
 
+        // The user gets stuck here until the enter a valid IP and port.
+        // Exits NewChat if we got a valid IP address.
         static void NewChat(ref Chat chat)
         {
             bool valid = false;
@@ -370,7 +392,7 @@ namespace chat_csharp_refactored
                 
                 Console.WriteLine("Enter an IP or hostname: ");
                 ipInput = Console.ReadLine();
-                valid = GetIP(ipInput, ref addr);
+                valid = ValidateIP(ipInput, ref addr);
                 if (valid)
                 {
                     port = GetPort();
@@ -378,6 +400,7 @@ namespace chat_csharp_refactored
 
             } while (!valid);
 
+            // Sets chat to attempt a connection.
             chat.SetPort(port);
             chat.SetIP(addr);
             chat.SetEndPoint();
@@ -385,7 +408,7 @@ namespace chat_csharp_refactored
         }
 
         
-
+        // Changes between encryption and regular read/write.
         static void ChangeMode()
         {
             Console.WriteLine("Changed Mode.");
@@ -396,28 +419,39 @@ namespace chat_csharp_refactored
                 Console.WriteLine("Changed mode to regular r/w.");
         }
 
+        // Sets encrypt mode to be off for the next message.
         static void TemporaryNoEncryptWhisper()
         {
             chat.ActivateTemporaryNoEncryptMode();
         }
 
+        // Made for the "/noe" send command. Removes "/noe" and doesn't
+        // encrypt the next message.
         static void TemporaryNoEncrypt()
         {
             userInput.Remove(0, 3);
             chat.ActivateTemporaryNoEncryptMode();
         }
 
+        // Disconnects the chat.
         static void QuitChat()
         {
             chat.Disconnect();
         }
 
+        // Commands for settings in which the key is a string found in user input, and the value is a function 
+        // tied to the command.
         static Dictionary<string, Action> settingCommands = new Dictionary<string, Action>
         {
             { ".mode", ChangeMode },
-            { "quit()", QuitChat }
+            { "quit()", QuitChat },
+            { ".quit", QuitChat },
+            { "disconnect()", QuitChat },
+            { ".disconnect", QuitChat }
         };
 
+        // Commands in how to send next message in which the key is a string found in user input,
+        //and the value is a function tied to the command.
         static Dictionary<string, Action> sendCommands = new Dictionary<string, Action>
         {
             { "/w", TemporaryNoEncryptWhisper },
@@ -471,6 +505,7 @@ namespace chat_csharp_refactored
             while (going)
             {
 
+                // If chat is not connected we try to create a new chat, with new IP and port.
                 if (!chat.IsConnected())
                 {
                     chat = new Chat();
@@ -487,6 +522,8 @@ namespace chat_csharp_refactored
                         sendableInput = HandleInput();
                         if (sendableInput)
                         {
+                            // We set the message such that the sending thread will pick up the
+                            // message and send it through the connection.
                             chat.SetMessage(userInput);
                         }
                     }
@@ -495,10 +532,7 @@ namespace chat_csharp_refactored
                         Console.WriteLine("Error: not connected anymore.");
                     }
                 }
-
-
             }
-            
         }
     }
 }
